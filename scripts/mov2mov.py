@@ -1,4 +1,5 @@
 import os.path
+import re
 import time
 
 import cv2
@@ -16,16 +17,33 @@ from modules.ui import plaintext_to_html
 from scripts.m2m_modnet import get_model, infer, infer2
 
 
-def process_mov2mov(p, mov_file, movie_frames, max_frames, resize_mode, w, h, generate_mov_mode, extract_characters,
-                    merge_background,
-                    modnet_model,
+def process_mov2mov(p, mov_file, movie_frames, max_frames, resize_mode, w, h, generate_mov_mode,
+                    # extract_characters,
+                    # merge_background,
+                    # modnet_model,
+                    modnet_enable, modnet_background_image, modnet_background_movie, modnet_model, modnet_resize_mode,
+                    modnet_merge_background_mode, modnet_movie_frames,
+
                     args):
     processing.fix_seed(p)
+
+    # 判断是不是多prompt
+    re_prompts = re.findall(r'\*([0-9]+):(.*?)\|\|', p.prompt, re.DOTALL)
+    re_negative_prompts = re.findall(r'\*([0-9]+):(.*?)\|\|', p.negative_prompt, re.DOTALL)
+    prompts = {}
+    negative_prompts = {}
+    for ppt in re_prompts: prompts[int(ppt[0])] = ppt[1]
+    for ppt in re_negative_prompts: negative_prompts[int(ppt[0])] = ppt[1]
 
     images = get_mov_all_images(mov_file, movie_frames)
     if not images:
         print('Failed to parse the video, please check')
         return
+    if modnet_enable and modnet_merge_background_mode == 4:
+        background_images = get_mov_all_images(modnet_background_movie, modnet_movie_frames)
+        if not background_images:
+            print('Failed to parse the background video, please check')
+            return
 
     print(f'The video conversion is completed, images:{len(images)}')
     if max_frames == -1 or max_frames > len(images):
@@ -40,6 +58,14 @@ def process_mov2mov(p, mov_file, movie_frames, max_frames, resize_mode, w, h, ge
         if i >= max_frames:
             break
 
+        if i + 1 in prompts.keys():
+            p.prompt = prompts[i + 1]
+            print(f'change prompt:{p.prompt}')
+
+        if i + 1 in negative_prompts.keys():
+            p.negative_prompt = negative_prompts[i + 1]
+            print(f'change negative_prompts:{p.negative_prompt}')
+
         state.job = f"{i + 1} out of {max_frames}"
         if state.skipped:
             state.skipped = False
@@ -48,32 +74,53 @@ def process_mov2mov(p, mov_file, movie_frames, max_frames, resize_mode, w, h, ge
             break
 
         modnet_network = None
-        # 处理modnet
-
         # 存一张底图
-
         img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), 'RGB')
         img = ImageOps.exif_transpose(img)
-        if extract_characters:
+
+        b_img = img.copy()
+        if modnet_enable and modnet_model:
+            # 提取出人物
             print(f'loading modnet model: {modnet_model}')
             modnet_network = get_model(modnet_model)
             print(f'Loading modnet model completed')
-            img, _ = infer2(modnet_network, img)
+            b_img, _ = infer2(modnet_network, img)
 
-        p.init_images = [img] * p.batch_size
+        p.init_images = [b_img] * p.batch_size
         proc = scripts.scripts_img2img.run(p, *args)
         if proc is None:
             print(f'current progress: {i + 1}/{max_frames}')
             processed = process_images(p)
             # 只取第一张
-
             gen_image = processed.images[0]
 
-            if extract_characters and merge_background:
-                backup = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), 'RGB')
-                backup = modules.images.resize_image(resize_mode, backup, w, h)
-                _, mask = infer2(modnet_network, backup)
+            # 合成图像
+            if modnet_enable and modnet_merge_background_mode != 0:
+                if modnet_merge_background_mode == 1:
+                    backup = img
+                elif modnet_merge_background_mode == 2:
+                    backup = Image.new('RGB', (w, h), 'green')
+                elif modnet_merge_background_mode == 3:
+                    backup = Image.fromarray(modnet_background_image, 'RGB')
+
+                elif modnet_merge_background_mode == 4:
+                    # mov
+                    if i >= len(background_images):
+                        backup = Image.new('RGB', (w, h), 'green')
+                    else:
+                        backup = Image.fromarray(cv2.cvtColor(background_images[i], cv2.COLOR_BGR2RGB), 'RGB')
+
+                backup = modules.images.resize_image(modnet_resize_mode, backup, w, h)
+                b_img = modules.images.resize_image(resize_mode, img, w, h)
+                # 合成
+                _, mask = infer2(modnet_network, b_img)
                 gen_image = Image.composite(gen_image, backup, mask)
+
+            # if extract_characters and merge_background:
+            #     backup = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), 'RGB')
+            #     backup = modules.images.resize_image(resize_mode, backup, w, h)
+            #     _, mask = infer2(modnet_network, backup)
+            #     gen_image = Image.composite(gen_image, backup, mask)
 
             generate_images.append(gen_image)
 
@@ -93,7 +140,8 @@ def process_mov2mov(p, mov_file, movie_frames, max_frames, resize_mode, w, h, ge
     print(f'Start generating {r_f} file')
 
     video = images_to_video(generate_images, movie_frames, mode, w, h,
-                            os.path.join(shared.opts.data.get("mov2mov_output_dir", mov2mov_output_dir), str(int(time.time())) + r_f, ))
+                            os.path.join(shared.opts.data.get("mov2mov_output_dir", mov2mov_output_dir),
+                                         str(int(time.time())) + r_f, ))
     print(f'The generation is complete, the directory::{video}')
 
     return video
@@ -107,9 +155,12 @@ def mov2mov(id_task: str,
             sampler_index,
             restore_faces,
             tiling,
-            extract_characters,
-            merge_background,
-            modnet_model,
+            # extract_characters,
+            # merge_background,
+            # modnet_model,
+            modnet_enable, modnet_background_image, modnet_background_movie, modnet_model, modnet_resize_mode,
+            modnet_merge_background_mode, modnet_movie_frames,
+
             # fixed_seed,
             generate_mov_mode,
             noise_multiplier,
@@ -137,7 +188,7 @@ def mov2mov(id_task: str,
     inpainting_mask_invert = 0
     p = StableDiffusionProcessingImg2Img(
         sd_model=shared.sd_model,
-        outpath_samples= shared.opts.data.get("mov2mov_outpath_samples", mov2mov_outpath_samples),
+        outpath_samples=shared.opts.data.get("mov2mov_outpath_samples", mov2mov_outpath_samples),
         outpath_grids=opts.outdir_grids or opts.outdir_img2img_grids,
         prompt=prompt,
         negative_prompt=negative_prompt,
@@ -183,7 +234,12 @@ def mov2mov(id_task: str,
 
     generate_video = process_mov2mov(p, mov_file, movie_frames, max_frames, resize_mode, width, height,
                                      generate_mov_mode,
-                                     extract_characters, merge_background, modnet_model, args)
+                                     # extract_characters, merge_background, modnet_model,
+                                     modnet_enable, modnet_background_image, modnet_background_movie, modnet_model,
+                                     modnet_resize_mode,
+                                     modnet_merge_background_mode, modnet_movie_frames,
+
+                                     args)
     processed = Processed(p, [], p.seed, "")
     p.close()
 
