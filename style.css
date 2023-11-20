@@ -125,10 +125,22 @@
     border-radius: 0 0.5rem 0.5rem 0;
 }
 
-#mov2mov_mov {
-    height: 480px !important;
-    max-height: 480px !important;
-    min-height: 480px !important;
+#mov2mov_mov video {
+    height: 480px;
+    max-height: 480px;
+    min-height: 480px;
+}
+
+#mov2mov_video video {
+    height: 480px;
+    max-height: 480px;
+    min-height: 480px;
+}
+
+#mov2mov_video_frame img {
+    height: 480px;
+    max-height: 480px;
+    min-height: 480px;
 }
 
 
@@ -141,4 +153,20 @@
     flex: 0;
     white-space: nowrap;
     min-width: auto;
+}
+
+#mov2mov_extra_view {
+    width: auto;
+}
+
+/* dataframe */
+#mov2mov_video_editor_custom_data_frame button {
+    display: none;
+}
+
+#mov2mov_keyframe_custom_container>div {
+    display: flex;
+    justify-content: center;
+    /*增加间距*/
+    gap: 1.5em;
 }
